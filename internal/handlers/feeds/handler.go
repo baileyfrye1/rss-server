@@ -3,7 +3,6 @@ package feeds
 import (
 	"encoding/json"
 	"encoding/xml"
-	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -38,7 +37,7 @@ func NewFeedHandler(l *log.Logger, urls []string) *Feeds {
 
 func (f *Feeds) GetFeed(w http.ResponseWriter, r *http.Request) {
 	wg := sync.WaitGroup{}
-	ch := make(chan []byte, len(f.Urls))
+	var output []byte
 
 	wg.Add(len(f.Urls))
 	for _, url := range f.Urls {
@@ -53,18 +52,20 @@ func (f *Feeds) GetFeed(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			output, err := json.MarshalIndent(&rss, "", " ")
+			js, err := json.MarshalIndent(&rss, "", " ")
 			if err != nil {
 				f.logger.Println(err)
 				return
 			}
-			ch <- output
+
+			output = append(output, js...)
 		}()
 	}
 
 	wg.Wait()
-	output := <-ch
-	fmt.Println(string(output))
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(output)
 }
 
 func fetchUrl(url string, f *Feeds) ([]byte, error) {
