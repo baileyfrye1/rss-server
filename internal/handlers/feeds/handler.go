@@ -15,6 +15,7 @@ type Feeds struct {
 	logger *log.Logger
 	Urls   []string
 	Client http.Client
+	Cache  *sync.Map
 }
 
 type RSS struct {
@@ -43,8 +44,18 @@ type FeedsResponse struct {
 	Feeds []SingularFeed `json:"feeds"`
 }
 
+type cacheEntry struct {
+	feed    SingularFeed
+	expires time.Time
+}
+
 func NewFeedHandler(l *log.Logger, urls []string) *Feeds {
-	return &Feeds{logger: l, Urls: urls, Client: http.Client{Timeout: 15 * time.Second}}
+	return &Feeds{
+		logger: l,
+		Urls:   urls,
+		Client: http.Client{Timeout: 15 * time.Second},
+		Cache:  &sync.Map{},
+	}
 }
 
 func (f *Feeds) GetFeed(w http.ResponseWriter, r *http.Request) {
@@ -107,7 +118,13 @@ func (f *Feeds) processFeed(
 	defer wg.Done()
 	defer func() { <-sem }()
 
-	rss := &RSS{}
+	if entry, ok := f.Cache.Load(url); ok {
+		if ce, ok := entry.(cacheEntry); ok && time.Now().Before(ce.expires) {
+			// Found url in cache, send cache to channel
+			ch <- ce.feed
+			return
+		}
+	}
 
 	data, err := f.fetchUrl(client, url)
 	if err != nil {
@@ -115,12 +132,19 @@ func (f *Feeds) processFeed(
 		return
 	}
 
+	rss := &RSS{}
+
 	if err = xml.Unmarshal(data, rss); err != nil {
 		f.logger.Println(err)
 		return
 	}
 
 	cleanedRss := stripHTMLTags(rss)
+
+	f.Cache.Store(url, cacheEntry{
+		feed:    SingularFeed{Source: rss.Channel.Title, Posts: cleanedRss.Channel.Items},
+		expires: time.Now().Add(3 * time.Hour),
+	})
 
 	ch <- SingularFeed{Source: rss.Channel.Title, Posts: cleanedRss.Channel.Items}
 }
