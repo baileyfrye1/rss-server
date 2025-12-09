@@ -81,6 +81,7 @@ func (f *Feeds) GetFeed(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "max-age=10800")
 	err := json.NewEncoder(w).Encode(response)
 	if err != nil {
 		f.logger.Println(err)
