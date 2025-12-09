@@ -8,11 +8,13 @@ import (
 	"net/http"
 	"regexp"
 	"sync"
+	"time"
 )
 
 type Feeds struct {
 	logger *log.Logger
 	Urls   []string
+	Client http.Client
 }
 
 type RSS struct {
@@ -42,17 +44,20 @@ type FeedsResponse struct {
 }
 
 func NewFeedHandler(l *log.Logger, urls []string) *Feeds {
-	return &Feeds{logger: l, Urls: urls}
+	return &Feeds{logger: l, Urls: urls, Client: http.Client{Timeout: 15 * time.Second}}
 }
 
 func (f *Feeds) GetFeed(w http.ResponseWriter, r *http.Request) {
 	var wg sync.WaitGroup
 	var response FeedsResponse
 	ch := make(chan SingularFeed, len(f.Urls))
+	sem := make(chan int, 5)
 
 	wg.Add(len(f.Urls))
+
 	for _, url := range f.Urls {
-		go f.processFeed(url, ch, &wg)
+		sem <- 1
+		go f.processFeed(url, ch, &wg, sem, f.Client)
 	}
 
 	go func() {
@@ -72,8 +77,8 @@ func (f *Feeds) GetFeed(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (f *Feeds) fetchUrl(url string) ([]byte, error) {
-	resp, err := http.Get(url)
+func (f *Feeds) fetchUrl(client http.Client, url string) ([]byte, error) {
+	resp, err := client.Get(url)
 	if err != nil {
 		f.logger.Println(err)
 		return nil, err
@@ -92,12 +97,19 @@ func stripHTMLTags(rss *RSS) *RSS {
 	return rss
 }
 
-func (f *Feeds) processFeed(url string, ch chan<- SingularFeed, wg *sync.WaitGroup) {
+func (f *Feeds) processFeed(
+	url string,
+	ch chan<- SingularFeed,
+	wg *sync.WaitGroup,
+	sem chan int,
+	client http.Client,
+) {
 	defer wg.Done()
+	defer func() { <-sem }()
 
 	rss := &RSS{}
 
-	data, err := f.fetchUrl(url)
+	data, err := f.fetchUrl(client, url)
 	if err != nil {
 		f.logger.Println(err)
 		return
